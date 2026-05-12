@@ -1,4 +1,4 @@
-use crate::sim::KuramotoModel;
+use crate::sim::{KuramotoModel, Topology};
 use eframe::egui::{self, Color32, FontId, Pos2, Stroke, Vec2};
 
 const BG: Color32 = Color32::from_rgb(24, 24, 28);
@@ -10,6 +10,41 @@ const TEXT_DIM: Color32 = Color32::from_rgb(130, 130, 140);
 const TEXT: Color32 = Color32::from_rgb(200, 200, 210);
 const DOT: Color32 = Color32::from_rgb(210, 210, 220);
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TopoChoice {
+    AllToAll,
+    Ring,
+    SmallWorld,
+    Random,
+}
+
+impl TopoChoice {
+    const ALL: [TopoChoice; 4] = [
+        TopoChoice::AllToAll,
+        TopoChoice::Ring,
+        TopoChoice::SmallWorld,
+        TopoChoice::Random,
+    ];
+
+    fn label(&self) -> &'static str {
+        match self {
+            TopoChoice::AllToAll => "All-to-all",
+            TopoChoice::Ring => "Ring",
+            TopoChoice::SmallWorld => "Small-world",
+            TopoChoice::Random => "Random",
+        }
+    }
+}
+
+fn topo_choice_from(t: &Topology) -> TopoChoice {
+    match t {
+        Topology::AllToAll => TopoChoice::AllToAll,
+        Topology::Ring(_) => TopoChoice::Ring,
+        Topology::SmallWorld(_, _) => TopoChoice::SmallWorld,
+        Topology::Random(_) => TopoChoice::Random,
+    }
+}
+
 pub struct KuramotoApp {
     model: KuramotoModel,
     n: usize,
@@ -19,12 +54,25 @@ pub struct KuramotoApp {
     steps_per_frame: usize,
     time: f64,
     r_history: Vec<f32>,
+    // topology controls
+    topo_choice: TopoChoice,
+    ring_k: usize,
+    sw_k: usize,
+    sw_p: f32,
+    rand_p: f32,
 }
 
 impl KuramotoApp {
-    pub fn new(n: usize, k: f32, dt: f64) -> Self {
+    pub fn new(n: usize, k: f32, dt: f64, topology: Topology) -> Self {
+        let topo_choice = topo_choice_from(&topology);
+        let (ring_k, sw_k, sw_p, rand_p) = match &topology {
+            Topology::AllToAll => (4, 4, 0.1, 0.3),
+            Topology::Ring(rk) => (*rk, 4, 0.1, 0.3),
+            Topology::SmallWorld(sk, sp) => (4, *sk, *sp as f32, 0.3),
+            Topology::Random(rp) => (4, 4, 0.1, *rp as f32),
+        };
         Self {
-            model: KuramotoModel::new(n, k as f64, dt),
+            model: KuramotoModel::new(n, k as f64, dt, topology),
             n,
             k,
             dt,
@@ -32,28 +80,45 @@ impl KuramotoApp {
             steps_per_frame: 10,
             time: 0.0,
             r_history: Vec::with_capacity(400),
+            topo_choice,
+            ring_k,
+            sw_k,
+            sw_p,
+            rand_p,
         }
+    }
+
+    fn current_topology(&self) -> Topology {
+        match self.topo_choice {
+            TopoChoice::AllToAll => Topology::AllToAll,
+            TopoChoice::Ring => Topology::Ring(self.ring_k),
+            TopoChoice::SmallWorld => Topology::SmallWorld(self.sw_k, self.sw_p as f64),
+            TopoChoice::Random => Topology::Random(self.rand_p as f64),
+        }
+    }
+
+    fn rebuild_model(&mut self) {
+        self.model = KuramotoModel::new(self.n, self.k as f64, self.dt, self.current_topology());
+        self.time = 0.0;
+        self.r_history.clear();
     }
 
     fn draw_phase_circle(&self, ui: &mut egui::Ui, center: Pos2, radius: f32) {
         let painter = ui.painter();
 
-        // guide rings
         for i in 1..=4 {
             painter.circle_stroke(center, radius * (i as f32 / 4.0), Stroke::new(0.5, GRID));
         }
-
-        // main ring
         painter.circle_stroke(center, radius, Stroke::new(1.5, RING));
 
-        // tick marks
         let labels = ["0", "π/2", "π", "3π/2"];
         for (idx, &label) in labels.iter().enumerate() {
             let angle = idx as f32 * std::f32::consts::FRAC_PI_2;
             let dir = Vec2::new(angle.cos(), -angle.sin());
-            let inner = center + dir * radius;
-            let outer = center + dir * (radius + 6.0);
-            painter.line_segment([inner, outer], Stroke::new(1.0, RING));
+            painter.line_segment(
+                [center + dir * radius, center + dir * (radius + 6.0)],
+                Stroke::new(1.0, RING),
+            );
             painter.text(
                 center + dir * (radius + 20.0),
                 egui::Align2::CENTER_CENTER,
@@ -63,7 +128,6 @@ impl KuramotoApp {
             );
         }
 
-        // oscillator dots
         let phases = self.model.phases();
         for i in 0..self.n {
             let a = phases[i] as f32;
@@ -71,14 +135,12 @@ impl KuramotoApp {
             painter.circle_filled(pos, 2.0, DOT);
         }
 
-        // order parameter vector
         let (r, psi) = self.model.mean_field();
         let end = center
             + Vec2::new(
                 (r as f32 * radius) * (psi as f32).cos(),
                 -(r as f32 * radius) * (psi as f32).sin(),
             );
-
         painter.line_segment([center, end], Stroke::new(2.0, ACCENT));
         painter.circle_filled(end, 3.5, ACCENT);
         painter.circle_filled(center, 2.0, RING);
@@ -164,9 +226,7 @@ impl eframe::App for KuramotoApp {
                 self.paused = !self.paused;
             }
             if i.key_pressed(egui::Key::R) {
-                self.model = KuramotoModel::new(self.n, self.k as f64, self.dt);
-                self.time = 0.0;
-                self.r_history.clear();
+                self.rebuild_model();
             }
             if i.key_pressed(egui::Key::ArrowUp) {
                 self.k = (self.k + 0.1).min(10.0);
@@ -197,6 +257,68 @@ impl eframe::App for KuramotoApp {
                 });
 
                 ui.add_space(14.0);
+                ui.separator();
+                ui.add_space(8.0);
+
+                // topology selector
+                ui.label(egui::RichText::new("Topology").size(12.0).color(TEXT_DIM));
+                let prev = self.topo_choice;
+                egui::ComboBox::from_id_salt("topo")
+                    .selected_text(self.topo_choice.label())
+                    .show_ui(ui, |ui| {
+                        for t in &TopoChoice::ALL {
+                            ui.selectable_value(&mut self.topo_choice, *t, t.label());
+                        }
+                    });
+
+                // topology-specific params
+                let mut topo_changed = prev != self.topo_choice;
+                match self.topo_choice {
+                    TopoChoice::AllToAll => {}
+                    TopoChoice::Ring => {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("k neighbors").size(11.0).color(TEXT_DIM));
+                            topo_changed |= ui
+                                .add(egui::DragValue::new(&mut self.ring_k).range(1..=20))
+                                .changed();
+                        });
+                    }
+                    TopoChoice::SmallWorld => {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("k neighbors").size(11.0).color(TEXT_DIM));
+                            topo_changed |= ui
+                                .add(egui::DragValue::new(&mut self.sw_k).range(1..=20))
+                                .changed();
+                        });
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("rewire p").size(11.0).color(TEXT_DIM));
+                            topo_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut self.sw_p)
+                                        .range(0.0..=1.0)
+                                        .speed(0.01),
+                                )
+                                .changed();
+                        });
+                    }
+                    TopoChoice::Random => {
+                        ui.horizontal(|ui| {
+                            ui.label(egui::RichText::new("edge p").size(11.0).color(TEXT_DIM));
+                            topo_changed |= ui
+                                .add(
+                                    egui::DragValue::new(&mut self.rand_p)
+                                        .range(0.0..=1.0)
+                                        .speed(0.01),
+                                )
+                                .changed();
+                        });
+                    }
+                }
+                if topo_changed {
+                    self.rebuild_model();
+                }
+
+                ui.add_space(8.0);
                 ui.separator();
                 ui.add_space(8.0);
 
@@ -246,9 +368,7 @@ impl eframe::App for KuramotoApp {
                         self.paused = !self.paused;
                     }
                     if ui.button("Reset").clicked() {
-                        self.model = KuramotoModel::new(self.n, self.k as f64, self.dt);
-                        self.time = 0.0;
-                        self.r_history.clear();
+                        self.rebuild_model();
                     }
                 });
 
@@ -305,7 +425,6 @@ fn configure_fonts(ctx: &egui::Context) {
                 "unicode_fallback".to_owned(),
                 egui::FontData::from_owned(data).into(),
             );
-
             fonts
                 .families
                 .entry(egui::FontFamily::Proportional)
@@ -318,7 +437,7 @@ fn configure_fonts(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-pub fn run(n: usize, k: f32, dt: f64) {
+pub fn run(n: usize, k: f32, dt: f64, topology: Topology) {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([1100.0, 750.0])
@@ -326,7 +445,7 @@ pub fn run(n: usize, k: f32, dt: f64) {
         ..Default::default()
     };
 
-    let app = KuramotoApp::new(n, k, dt);
+    let app = KuramotoApp::new(n, k, dt, topology);
 
     eframe::run_native(
         "Kuramoto Model",
