@@ -305,6 +305,7 @@ fn configure_fonts(ctx: &egui::Context) {
                 "unicode_fallback".to_owned(),
                 egui::FontData::from_owned(data).into(),
             );
+
             fonts
                 .families
                 .entry(egui::FontFamily::Proportional)
