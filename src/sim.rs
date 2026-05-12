@@ -40,7 +40,6 @@ impl KuramotoModel {
 
         for i in 0..self.n {
             self.theta[i] += dtheta[i] * self.dt;
-
             self.theta[i] = self.theta[i].rem_euclid(2.0 * PI);
         }
     }
@@ -52,5 +51,34 @@ impl KuramotoModel {
         });
         let n = self.n as f64;
         (sum_cos.powi(2) + sum_sin.powi(2)).sqrt() / n
+    }
+
+    /// (r, ψ) — magnitude and phase of the mean field
+    pub fn mean_field(&self) -> (f64, f64) {
+        let (sc, ss) = self.theta.iter().fold((0.0, 0.0), |(sc, ss), &t| {
+            (sc + t.cos(), ss + t.sin())
+        });
+        let n = self.n as f64;
+        let r = (sc * sc + ss * ss).sqrt() / n;
+        let psi = ss.atan2(sc);
+        (r, psi)
+    }
+
+    pub fn phases(&self) -> &[f64] {
+        &self.theta
+    }
+
+    #[allow(dead_code)]
+    pub fn frequencies(&self) -> &[f64] {
+        &self.omega
+    }
+
+    pub fn set_coupling(&mut self, k: f64) {
+        self.k = k;
+    }
+
+    #[allow(dead_code)]
+    pub fn n(&self) -> usize {
+        self.n
     }
 }
