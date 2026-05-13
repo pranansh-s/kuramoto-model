@@ -13,7 +13,7 @@ with open('data.csv', 'r') as f:
         r_vals.append(float(row['r']))
 
 fig, ax = plt.subplots(figsize=(10, 6))
-ax.plot(K_vals, r_vals, 'o-', color='#4A90D9', markersize=4, linewidth=1.5, label='Simulation (N=200)')
+ax.plot(K_vals, r_vals, 'o-', color='#4A90D9', markersize=4, linewidth=1.5, label='Simulation (N=500)')
 ax.set_xlabel('Coupling Strength K', fontsize=14)
 ax.set_ylabel('Order Parameter r', fontsize=14)
 ax.set_title('Kuramoto Model: Synchronisation Order vs Coupling Strength', fontsize=16)
